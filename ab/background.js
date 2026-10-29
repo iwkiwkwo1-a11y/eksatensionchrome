@@ -1,10 +1,20 @@
 // Service worker background script for extension "ab"
 
-// Map to hold detected media items per tab: tabId -> Array of media objects
 const tabMediaMap = {};
+
+function isValidMediaUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  if (trimmed.startsWith('javascript:') || trimmed.startsWith('blob:') || trimmed.startsWith('data:')) return false;
+  if (trimmed.includes('${') || trimmed.includes('item.dvd_id') || trimmed.includes('cdnUrl(')) return false;
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) return false;
+  return true;
+}
 
 function addMediaItem(tabId, item) {
   if (!tabId || tabId < 0) return;
+  if (!isValidMediaUrl(item.url)) return;
+
   if (!tabMediaMap[tabId]) {
     tabMediaMap[tabId] = [];
   }
@@ -12,51 +22,47 @@ function addMediaItem(tabId, item) {
   // Prevent duplicate URLs per tab
   const exists = tabMediaMap[tabId].some(m => m.url === item.url);
   if (!exists) {
+    const isHls = item.url.includes('.m3u8');
+    const isPreview = item.url.includes('preview.mp4') || item.category === 'preview';
+
     tabMediaMap[tabId].push({
       ...item,
+      category: isHls ? 'main' : (isPreview ? 'preview' : (item.category || 'video')),
       id: Date.now().toString(36) + Math.random().toString(36).substring(2, 5),
       timestamp: Date.now()
     });
 
-    // Update extension badge count for this tab
     const count = tabMediaMap[tabId].length;
     chrome.action.setBadgeText({ tabId, text: count > 0 ? count.toString() : '' });
-    chrome.action.setBadgeBackgroundColor({ tabId, color: '#4CAF50' });
+    chrome.action.setBadgeBackgroundColor({ tabId, color: '#2196F3' });
 
-    // Sync to storage for persistence
     chrome.storage.local.set({ [`media_${tabId}`]: tabMediaMap[tabId] });
   }
 }
 
-// Network Request Listener for media streams
+// Network Request Listener
 chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
     const url = details.url;
-    if (!url) return;
+    if (!url || !isValidMediaUrl(url)) return;
 
     const lowerUrl = url.toLowerCase();
     const isM3u8 = lowerUrl.includes('.m3u8');
     const isMp4 = lowerUrl.includes('.mp4');
-    const isMedia = details.type === 'media' || isM3u8 || isMp4;
 
-    if (isMedia) {
-      let mediaType = 'video';
-      if (isM3u8) mediaType = 'hls';
-      else if (isMp4) mediaType = 'mp4';
-
+    if (isM3u8 || isMp4 || details.type === 'media') {
       addMediaItem(details.tabId, {
         url: url,
-        type: mediaType,
+        type: isM3u8 ? 'hls' : 'mp4',
         source: 'network',
-        method: details.method || 'GET',
-        initiator: details.initiator || ''
+        method: details.method || 'GET'
       });
     }
   },
   { urls: ['<all_urls>'] }
 );
 
-// Clean up when a tab is closed or navigated
+// Tab cleanup
 chrome.tabs.onRemoved.addListener((tabId) => {
   delete tabMediaMap[tabId];
   chrome.storage.local.remove([`media_${tabId}`]);
@@ -70,7 +76,36 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   }
 });
 
-// Communication with Content Scripts and Popup
+// Download Manager tracking
+const downloadsStore = {};
+
+chrome.downloads.onCreated.addListener((downloadItem) => {
+  downloadsStore[downloadItem.id] = {
+    id: downloadItem.id,
+    url: downloadItem.url,
+    filename: downloadItem.filename || downloadItem.url.split('/').pop().split('?')[0] || 'media_file',
+    fileSize: downloadItem.fileSize,
+    bytesReceived: downloadItem.bytesReceived,
+    state: downloadItem.state, // in_progress, interrupted, complete
+    paused: downloadItem.paused,
+    error: downloadItem.error,
+    startTime: Date.now()
+  };
+});
+
+chrome.downloads.onChanged.addListener((delta) => {
+  if (!downloadsStore[delta.id]) return;
+  const item = downloadsStore[delta.id];
+
+  if (delta.bytesReceived) item.bytesReceived = delta.bytesReceived.current;
+  if (delta.totalBytes) item.fileSize = delta.totalBytes.current;
+  if (delta.state) item.state = delta.state.current;
+  if (delta.paused) item.paused = delta.paused.current;
+  if (delta.error) item.error = delta.error.current;
+  if (delta.filename) item.filename = delta.filename.current;
+});
+
+// Communication
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tabId = sender.tab ? sender.tab.id : message.tabId;
 
@@ -80,9 +115,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         addMediaItem(tabId, {
           url: item.url,
           type: item.type || 'video',
+          category: item.category,
           source: 'dom',
-          title: item.title || '',
-          attributes: item.attributes || {}
+          title: item.title || ''
         });
       });
     }
@@ -97,11 +132,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ status: 'cleared' });
   } else if (message.action === 'DOWNLOAD_MEDIA') {
     if (message.url) {
-      const filename = message.filename || message.url.split('/').pop().split('?')[0] || 'media_file';
+      const filename = message.filename || message.url.split('/').pop().split('?')[0] || 'media_video';
       chrome.downloads.download({
         url: message.url,
         filename: filename,
-        saveAs: true
+        saveAs: false
       }, (downloadId) => {
         if (chrome.runtime.lastError) {
           sendResponse({ success: false, error: chrome.runtime.lastError.message });
@@ -109,7 +144,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ success: true, downloadId });
         }
       });
-      return true; // async response
+      return true;
     }
+  } else if (message.action === 'GET_DOWNLOADS') {
+    chrome.downloads.search({ limit: 20, orderBy: ['-startTime'] }, (items) => {
+      sendResponse({ downloads: items || [] });
+    });
+    return true;
+  } else if (message.action === 'PAUSE_DOWNLOAD') {
+    chrome.downloads.pause(message.downloadId, () => sendResponse({ success: true }));
+    return true;
+  } else if (message.action === 'RESUME_DOWNLOAD') {
+    chrome.downloads.resume(message.downloadId, () => sendResponse({ success: true }));
+    return true;
+  } else if (message.action === 'CANCEL_DOWNLOAD') {
+    chrome.downloads.cancel(message.downloadId, () => sendResponse({ success: true }));
+    return true;
   }
 });

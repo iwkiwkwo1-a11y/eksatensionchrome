@@ -3,31 +3,57 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ab - Media Detector</title>
+  <title>ab - Media & Download Manager</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <div class="header">
-    <div class="logo">
+  <!-- Header with extension brand and top tab navigation -->
+  <header class="header">
+    <div class="brand">
       <span class="badge">ab</span>
-      <h2>Media Sniffer</h2>
+      <h2>Media & Download Manager</h2>
     </div>
-    <button id="clear-btn" title="Clear detected items">Clear</button>
-  </div>
+    <div class="nav-tabs">
+      <button class="nav-tab active" data-tab="sniffer">Sniffer (<span id="total-media-cnt">0</span>)</button>
+      <button class="nav-tab" data-tab="downloads">Downloads</button>
+    </div>
+  </header>
 
-  <div class="filter-bar">
-    <button class="filter-btn active" data-filter="all">All (<span id="cnt-all">0</span>)</button>
-    <button class="filter-btn" data-filter="hls">HLS / M3U8 (<span id="cnt-hls">0</span>)</button>
-    <button class="filter-btn" data-filter="mp4">MP4 (<span id="cnt-mp4">0</span>)</button>
-  </div>
+  <!-- TAB 1: MEDIA SNIFFER -->
+  <main id="tab-sniffer" class="tab-content active">
+    <div class="toolbar">
+      <div class="filter-chips">
+        <button class="chip active" data-filter="all">All</button>
+        <button class="chip" data-filter="main">Main Video (M3U8)</button>
+        <button class="chip" data-filter="preview">Previews (MP4)</button>
+      </div>
+      <div class="batch-actions">
+        <button id="copy-all-btn" class="secondary-btn" title="Copy all filtered links">Copy All</button>
+        <button id="download-all-btn" class="primary-btn" title="Download all filtered media">Download All</button>
+        <button id="clear-btn" class="danger-btn" title="Clear detected items">Clear</button>
+      </div>
+    </div>
 
-  <div id="media-list" class="media-list">
-    <div class="empty-state">No media detected on this tab yet.</div>
-  </div>
+    <div id="media-list" class="list-container">
+      <div class="empty-state">No valid media streams detected on this tab.</div>
+    </div>
+  </main>
 
-  <div class="footer">
-    <span id="status-text">Extension ab active</span>
-  </div>
+  <!-- TAB 2: DOWNLOAD MANAGER -->
+  <main id="tab-downloads" class="tab-content">
+    <div class="toolbar download-toolbar">
+      <span>Active & Recent Downloads</span>
+      <button id="refresh-downloads-btn" class="secondary-btn">Refresh</button>
+    </div>
+
+    <div id="download-list" class="list-container">
+      <div class="empty-state">No recent downloads found.</div>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <span id="status-text">Extension ab active • Clean Media Filtering</span>
+  </footer>
 
   <script src="popup.js"></script>
 </body>
