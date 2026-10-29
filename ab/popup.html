@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ab - Media Detector</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="header">
+    <div class="logo">
+      <span class="badge">ab</span>
+      <h2>Media Sniffer</h2>
+    </div>
+    <button id="clear-btn" title="Clear detected items">Clear</button>
+  </div>
+
+  <div class="filter-bar">
+    <button class="filter-btn active" data-filter="all">All (<span id="cnt-all">0</span>)</button>
+    <button class="filter-btn" data-filter="hls">HLS / M3U8 (<span id="cnt-hls">0</span>)</button>
+    <button class="filter-btn" data-filter="mp4">MP4 (<span id="cnt-mp4">0</span>)</button>
+  </div>
+
+  <div id="media-list" class="media-list">
+    <div class="empty-state">No media detected on this tab yet.</div>
+  </div>
+
+  <div class="footer">
+    <span id="status-text">Extension ab active</span>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
