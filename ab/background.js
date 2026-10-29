@@ -1,6 +1,7 @@
-// Service worker background script for extension "ab"
+importScripts('hls-downloader.js');
 
 const tabMediaMap = {};
+const activeHlsDownloads = {};
 
 function isValidMediaUrl(url) {
   if (!url || typeof url !== 'string') return false;
@@ -19,7 +20,6 @@ function addMediaItem(tabId, item) {
     tabMediaMap[tabId] = [];
   }
 
-  // Prevent duplicate URLs per tab
   const exists = tabMediaMap[tabId].some(m => m.url === item.url);
   if (!exists) {
     const isHls = item.url.includes('.m3u8');
@@ -40,7 +40,7 @@ function addMediaItem(tabId, item) {
   }
 }
 
-// Network Request Listener
+// Intercept & Capture Network Media Requests
 chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
     const url = details.url;
@@ -55,7 +55,7 @@ chrome.webRequest.onBeforeRequest.addListener(
         url: url,
         type: isM3u8 ? 'hls' : 'mp4',
         source: 'network',
-        method: details.method || 'GET'
+        initiator: details.initiator || 'https://missav.ws/'
       });
     }
   },
@@ -76,36 +76,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   }
 });
 
-// Download Manager tracking
-const downloadsStore = {};
-
-chrome.downloads.onCreated.addListener((downloadItem) => {
-  downloadsStore[downloadItem.id] = {
-    id: downloadItem.id,
-    url: downloadItem.url,
-    filename: downloadItem.filename || downloadItem.url.split('/').pop().split('?')[0] || 'media_file',
-    fileSize: downloadItem.fileSize,
-    bytesReceived: downloadItem.bytesReceived,
-    state: downloadItem.state, // in_progress, interrupted, complete
-    paused: downloadItem.paused,
-    error: downloadItem.error,
-    startTime: Date.now()
-  };
-});
-
-chrome.downloads.onChanged.addListener((delta) => {
-  if (!downloadsStore[delta.id]) return;
-  const item = downloadsStore[delta.id];
-
-  if (delta.bytesReceived) item.bytesReceived = delta.bytesReceived.current;
-  if (delta.totalBytes) item.fileSize = delta.totalBytes.current;
-  if (delta.state) item.state = delta.state.current;
-  if (delta.paused) item.paused = delta.paused.current;
-  if (delta.error) item.error = delta.error.current;
-  if (delta.filename) item.filename = delta.filename.current;
-});
-
-// Communication
+// Communication & Advanced Downloads
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tabId = sender.tab ? sender.tab.id : message.tabId;
 
@@ -122,43 +93,92 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
     }
     sendResponse({ status: 'ok' });
+
   } else if (message.action === 'GET_MEDIA_LIST') {
     const list = tabMediaMap[tabId] || [];
     sendResponse({ items: list });
+
   } else if (message.action === 'CLEAR_MEDIA_LIST') {
     tabMediaMap[tabId] = [];
     chrome.action.setBadgeText({ tabId, text: '' });
     chrome.storage.local.remove([`media_${tabId}`]);
     sendResponse({ status: 'cleared' });
+
   } else if (message.action === 'DOWNLOAD_MEDIA') {
-    if (message.url) {
-      const filename = message.filename || message.url.split('/').pop().split('?')[0] || 'media_video';
+    const mediaUrl = message.url;
+    if (!mediaUrl) return;
+
+    // Check if URL is HLS (.m3u8) -> Use HLS Segment Downloader & Merger
+    if (mediaUrl.includes('.m3u8')) {
+      const taskId = 'hls_' + Date.now();
+      const downloader = new HlsDownloader({
+        onProgress: (progress) => {
+          activeHlsDownloads[taskId] = {
+            id: taskId,
+            url: mediaUrl,
+            filename: 'video_' + Date.now() + '.ts',
+            state: progress.status === 'complete' ? 'complete' : 'in_progress',
+            statusText: progress.text,
+            percent: progress.percent
+          };
+        },
+        onError: (errMsg) => {
+          activeHlsDownloads[taskId] = {
+            id: taskId,
+            url: mediaUrl,
+            state: 'interrupted',
+            error: errMsg,
+            percent: 0
+          };
+        },
+        onComplete: (blob) => {
+          // Convert Blob to Blob URL and trigger Chrome download
+          const blobUrl = URL.createObjectURL(blob);
+          const filename = 'video_' + Date.now() + '.ts';
+          chrome.downloads.download({
+            url: blobUrl,
+            filename: filename,
+            saveAs: false
+          });
+        }
+      });
+
+      downloader.downloadHlsStream(mediaUrl, 'https://missav.ws/');
+      sendResponse({ success: true, taskId, type: 'hls' });
+      return true;
+
+    } else {
+      // Standard Direct / MP4 Download
+      const filename = message.filename || mediaUrl.split('/').pop().split('?')[0] || 'video.mp4';
       chrome.downloads.download({
-        url: message.url,
+        url: mediaUrl,
         filename: filename,
         saveAs: false
       }, (downloadId) => {
         if (chrome.runtime.lastError) {
-          sendResponse({ success: false, error: chrome.runtime.lastError.message });
+          // Fallback fetch as Blob if direct download fails due to CORS/Referer
+          fetch(mediaUrl, { headers: { 'Referer': 'https://missav.ws/' } })
+            .then(res => res.blob())
+            .then(blob => {
+              const blobUrl = URL.createObjectURL(blob);
+              chrome.downloads.download({ url: blobUrl, filename, saveAs: false });
+              sendResponse({ success: true, mode: 'blob' });
+            })
+            .catch(e => {
+              sendResponse({ success: false, error: e.message });
+            });
         } else {
           sendResponse({ success: true, downloadId });
         }
       });
       return true;
     }
+
   } else if (message.action === 'GET_DOWNLOADS') {
     chrome.downloads.search({ limit: 20, orderBy: ['-startTime'] }, (items) => {
-      sendResponse({ downloads: items || [] });
+      const hlsTasks = Object.values(activeHlsDownloads);
+      sendResponse({ downloads: items || [], hlsTasks });
     });
-    return true;
-  } else if (message.action === 'PAUSE_DOWNLOAD') {
-    chrome.downloads.pause(message.downloadId, () => sendResponse({ success: true }));
-    return true;
-  } else if (message.action === 'RESUME_DOWNLOAD') {
-    chrome.downloads.resume(message.downloadId, () => sendResponse({ success: true }));
-    return true;
-  } else if (message.action === 'CANCEL_DOWNLOAD') {
-    chrome.downloads.cancel(message.downloadId, () => sendResponse({ success: true }));
     return true;
   }
 });

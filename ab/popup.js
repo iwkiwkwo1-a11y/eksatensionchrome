@@ -14,7 +14,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Navigation Tabs (Sniffer vs Downloads)
   document.querySelectorAll('.nav-tab').forEach(tabBtn => {
-    tabBtn.addEventListener('click', (e) => {
+    tabBtn.addEventListener('click', () => {
       document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'));
       document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
 
@@ -30,7 +30,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Sniffer Filter Chips
   document.querySelectorAll('.chip').forEach(chip => {
-    chip.addEventListener('click', (e) => {
+    chip.addEventListener('click', () => {
       document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
       chip.classList.add('active');
       activeFilter = chip.getAttribute('data-filter');
@@ -114,7 +114,7 @@ function renderMediaItems() {
 
     const isMain = item.category === 'main' || item.type === 'hls';
     const tagClass = isMain ? 'tag-main' : (item.category === 'preview' ? 'tag-preview' : 'tag-video');
-    const tagLabel = isMain ? 'MAIN HLS' : (item.category === 'preview' ? 'PREVIEW MP4' : 'MP4 VIDEO');
+    const tagLabel = isMain ? 'MAIN HLS STREAM' : (item.category === 'preview' ? 'PREVIEW MP4' : 'MP4 VIDEO');
 
     card.innerHTML = `
       <div class="card-header">
@@ -124,7 +124,7 @@ function renderMediaItems() {
       <div class="media-url" title="${escapeHtml(item.url)}">${escapeHtml(item.url)}</div>
       <div class="card-actions">
         <button class="secondary-btn copy-btn">Copy Link</button>
-        <button class="primary-btn download-btn">Download</button>
+        <button class="primary-btn download-btn">${isMain ? 'Download HLS' : 'Download MP4'}</button>
       </div>
     `;
 
@@ -139,8 +139,8 @@ function renderMediaItems() {
     const downloadBtn = card.querySelector('.download-btn');
     downloadBtn.addEventListener('click', () => {
       chrome.runtime.sendMessage({ action: 'DOWNLOAD_MEDIA', url: item.url }, (res) => {
-        downloadBtn.textContent = res && res.success ? 'Started' : 'Failed';
-        setTimeout(() => downloadBtn.textContent = 'Download', 1500);
+        downloadBtn.textContent = res && res.success ? (isMain ? 'Engine Started' : 'Started') : 'Failed';
+        setTimeout(() => downloadBtn.textContent = isMain ? 'Download HLS' : 'Download MP4', 1500);
       });
     });
 
@@ -153,12 +153,34 @@ function loadDownloads() {
     const container = document.getElementById('download-list');
     container.innerHTML = '';
 
-    if (!response || !response.downloads || response.downloads.length === 0) {
+    const downloads = (response && response.downloads) || [];
+    const hlsTasks = (response && response.hlsTasks) || [];
+
+    if (downloads.length === 0 && hlsTasks.length === 0) {
       container.innerHTML = '<div class="empty-state">No active or recent downloads.</div>';
       return;
     }
 
-    response.downloads.forEach(dl => {
+    // Render active HLS segment downloads
+    hlsTasks.forEach(task => {
+      const card = document.createElement('div');
+      card.className = 'download-card';
+
+      card.innerHTML = `
+        <div class="download-title" title="${escapeHtml(task.filename)}">⚡ ${escapeHtml(task.filename)}</div>
+        <div class="download-progress-bar">
+          <div class="download-progress-fill" style="width: ${task.percent || 0}%;"></div>
+        </div>
+        <div class="download-meta">
+          <span>${escapeHtml(task.statusText || task.state)}</span>
+          <span>${task.percent || 0}%</span>
+        </div>
+      `;
+      container.appendChild(card);
+    });
+
+    // Render standard browser downloads
+    downloads.forEach(dl => {
       const card = document.createElement('div');
       card.className = 'download-card';
 
